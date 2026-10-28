@@ -1,0 +1,75 @@
+// METHOD BODY ONLY for Java service nbkPackageSync.services:compareForDsp
+// Inputs (String): remoteAlias, includePrefix, packagesText, excludePackagesText, onlyDifferences
+// Outputs: exact comparePackages outputs + runAt (String)
+// Does not write to either server. Delegates to comparePackages.
+
+IDataCursor in = pipeline.getCursor();
+String alias = IDataUtil.getString(in, "remoteAlias");
+String prefix = IDataUtil.getString(in, "includePrefix");
+String packagesText = IDataUtil.getString(in, "packagesText");
+String excludeText = IDataUtil.getString(in, "excludePackagesText");
+String onlyDiff = IDataUtil.getString(in, "onlyDifferences");
+in.destroy();
+
+alias = alias == null ? "" : alias.trim();
+prefix = prefix == null ? "" : prefix.trim();
+if (alias.length() == 0) throw new ServiceException("Mirror remoteAlias is required");
+if (!alias.matches("[A-Za-z0-9_.-]{1,100}")) throw new ServiceException("Invalid remoteAlias");
+if (prefix.length() == 0) prefix = "NBK";
+if (!prefix.matches("[A-Za-z0-9_.-]{1,80}")) throw new ServiceException("Invalid includePrefix");
+if (!"false".equalsIgnoreCase(onlyDiff)) onlyDiff = "true";
+
+// Convert textarea comma/newline/semicolon-separated names to real String Lists.
+LinkedHashSet<String> packageSet = new LinkedHashSet<String>();
+if (packagesText != null && packagesText.trim().length() > 0) {
+    for (String name : packagesText.split("[,;\\r\\n]+")) {
+        name = name.trim();
+        if (name.length() == 0) continue;
+        if (!name.matches("[A-Za-z0-9_.$-]{1,180}")) throw new ServiceException("Invalid package name: " + name);
+        packageSet.add(name);
+    }
+}
+LinkedHashSet<String> excludeSet = new LinkedHashSet<String>();
+if (excludeText != null && excludeText.trim().length() > 0) {
+    for (String name : excludeText.split("[,;\\r\\n]+")) {
+        name = name.trim();
+        if (name.length() == 0) continue;
+        if (!name.matches("[A-Za-z0-9_.$-]{1,180}")) throw new ServiceException("Invalid excluded package name: " + name);
+        excludeSet.add(name);
+    }
+}
+if (packageSet.size() > 300 || excludeSet.size() > 300)
+    throw new ServiceException("Maximum 300 explicit or excluded package names");
+
+IData args = IDataFactory.create();
+IDataCursor a = args.getCursor();
+IDataUtil.put(a, "remoteAlias", alias);
+IDataUtil.put(a, "includePrefix", prefix);
+IDataUtil.put(a, "inventoryMode", "helper");
+IDataUtil.put(a, "onlyDifferences", onlyDiff);
+if (!packageSet.isEmpty()) IDataUtil.put(a, "packages", packageSet.toArray(new String[packageSet.size()]));
+if (!excludeSet.isEmpty()) IDataUtil.put(a, "excludePackages", excludeSet.toArray(new String[excludeSet.size()]));
+a.destroy();
+
+IData result = Service.doInvoke("nbkPackageSync.services", "comparePackages", args);
+if (result == null) throw new ServiceException("comparePackages returned a null pipeline");
+
+// Copy only the declared outputs from comparePackages. This is an explicit allow-list.
+String[] keys = new String[]{
+  "packagesReport", "assetsReport", "outOfSyncPackages", "unverifiedPackages",
+  "comparedPackages", "matchingPackages", "differentPackages",
+  "missingMainlinePackages", "missingMirrorPackages", "errorPackages",
+  "complete", "hasDifferences", "comparisonLevel", "inventorySource"
+};
+IDataCursor resultCursor = result.getCursor();
+IDataCursor out = pipeline.getCursor();
+for (String key : keys) {
+    Object value = IDataUtil.get(resultCursor, key);
+    if (value != null) IDataUtil.put(out, key, value);
+}
+IDataUtil.put(out, "remoteAlias", alias);
+IDataUtil.put(out, "includePrefix", prefix);
+IDataUtil.put(out, "onlyDifferences", onlyDiff);
+IDataUtil.put(out, "runAt", java.time.OffsetDateTime.now().toString());
+out.destroy();
+resultCursor.destroy();

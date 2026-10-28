@@ -1,0 +1,6 @@
+// Add these to the Designer Java service Imports area (if not already present):
+import com.wm.data.*;
+import com.wm.app.b2b.server.Service;
+import com.wm.app.b2b.server.ServiceException;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
