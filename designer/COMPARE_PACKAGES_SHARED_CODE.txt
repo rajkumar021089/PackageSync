@@ -1,0 +1,73 @@
+    private static String clean(String s) { return s == null ? "" : s.trim(); }
+    private static String str(String s) { return s == null ? "" : s; }
+    private static boolean yes(String s) { return "true".equalsIgnoreCase(clean(s)) || "1".equals(clean(s)); }
+    private static String err(Throwable t) {
+        String m = t.getMessage();
+        return t.getClass().getSimpleName() + (m == null ? "" : ": " + m);
+    }
+    private static IData doc(String... kv) {
+        IData o = IDataFactory.create(); IDataCursor c = o.getCursor();
+        for (int i = 0; i < kv.length; i += 2) IDataUtil.put(c, kv[i], kv[i + 1]);
+        c.destroy(); return o;
+    }
+    private static IData invokeRemote(String alias, String service, IData args) throws Exception {
+        IDataCursor c = args.getCursor();
+        IDataUtil.put(c, "$alias", alias);
+        IDataUtil.put(c, "$service", service);
+        IDataUtil.put(c, "$scope", "SESSION");
+        IDataUtil.put(c, "$clusterRetry", "false");
+        // The alias MUST point to an exact mirror host and have no retry server.
+        c.destroy();
+        return Service.doInvoke("pub.remote", "invoke", args);
+    }
+    private static Map<String, String> checksums(boolean remote, String alias, String pkg) throws Exception {
+        IData req = IDataFactory.create();
+        IDataCursor input = req.getCursor();
+        IDataUtil.put(input, "packages", new String[]{pkg});
+        input.destroy();
+        IData result = remote ? invokeRemote(alias, "pub.assets:getChecksums", req)
+                              : Service.doInvoke("pub.assets", "getChecksums", req);
+        if (result == null) throw new ServiceException("No checksum pipeline for " + pkg);
+        IDataCursor cursor = result.getCursor();
+        IData[] rows = IDataUtil.getIDataArray(cursor, "checksums");
+        cursor.destroy();
+        if (rows == null) throw new ServiceException("Missing 'checksums' Document List for " + pkg);
+        TreeMap<String, String> out = new TreeMap<String, String>();
+        for (IData row : rows) {
+            if (row == null) throw new ServiceException("Null checksum row in " + pkg);
+            IDataCursor c = row.getCursor();
+            String name = clean(IDataUtil.getString(c, "name"));
+            String fromPkg = clean(IDataUtil.getString(c, "package"));
+            String checksum = clean(IDataUtil.getString(c, "checksum"));
+            c.destroy();
+            if (name.isEmpty()) throw new ServiceException("Checksum record missing asset name: " + pkg);
+            if (!pkg.equals(fromPkg) || checksum.isEmpty()) {
+                throw new ServiceException("Checksum/package unavailable for " + name + "; check package load and List ACL on both servers");
+            }
+            if (out.containsKey(name)) throw new ServiceException("Duplicate checksum asset: " + name);
+            out.put(name, checksum);
+        }
+        return out;
+    }
+    private static Set<String> parseWmRootInventory(IData result) throws Exception {
+        if (result == null) throw new ServiceException("wm.server.packages:packageList returned no pipeline");
+        IDataCursor c = result.getCursor();
+        Object packages = IDataUtil.get(c, "packages");
+        c.destroy();
+        TreeSet<String> out = new TreeSet<String>();
+        if (packages instanceof String[]) {
+            for (String s : (String[])packages) if (s != null && !s.trim().isEmpty()) out.add(s.trim());
+        } else if (packages instanceof IData[]) {
+            for (IData row : (IData[])packages) {
+                if (row == null) continue;
+                IDataCursor p = row.getCursor();
+                String name = clean(IDataUtil.getString(p, "name"));
+                if (name.isEmpty()) name = clean(IDataUtil.getString(p, "packageName"));
+                p.destroy();
+                if (!name.isEmpty()) out.add(name);
+            }
+        } else {
+            throw new ServiceException("Unrecognized WmRoot packageList response. Install helper on mirror.");
+        }
+        return out;
+    }
